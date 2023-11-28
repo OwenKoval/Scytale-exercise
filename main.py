@@ -37,17 +37,19 @@ def get_github_data(organization):
         with open(file_path, 'w', encoding='utf-8') as file:
             json.dump(pulls_response, file, indent=2)
 
-        logging.info(f'Pull requests for {repo_name} saved to {file_path}')
+        logging.info('Pull requests for %s saved to %s', repo_name, file_path)
 
 
-def transform_data(spark, github_organization, schema):
+def transform_data(github_organization, schema):
     """
-        Find the numbers of prs and numbers with closed prs per repository ID and date of last merged PR
-    :param spark: SparkSession
+        Find the numbers of prs and numbers with closed prs per repository
+            ID and date of last merged PR
     :param github_organization: constant to access the needed repository
     :param schema: use schema which defined by developer
     :return: df with numbers of prs and numbers with closed prs per repository
     """
+
+    spark = spark_builder(appname='ReadJsonFiles')
 
     raw_df = read_json(spark=spark,
                        path=f'{INPUT_DATA_FOLDER}/{github_organization}/*.json',
@@ -60,29 +62,29 @@ def transform_data(spark, github_organization, schema):
                   .select('state', 'merged_at', f.col('head.repo.id').alias('repository_id'),
                           f.col('head.repo.name').alias('repository_name'),
                           f.col('head.repo.owner.login').alias('repository_owner'),
-                          f.substring_index('head.repo.full_name', '/', 1).alias('organization_name'))
+                          f.substring_index('head.repo.full_name',
+                                            '/', 1).alias('organization_name'))
                   .cache())
 
     result_df = (cleaned_df
-                 .groupBy('repository_id', 'repository_name', 'repository_owner', 'organization_name')
+                 .groupBy('repository_id', 'repository_name',
+                          'repository_owner', 'organization_name')
                  .agg(f.count(f.when(total_count, 1)).alias('num_prs'),
                       f.count(f.when(closed_count, 1)).alias('num_closed_prs'),
                       f.max('merged_at').alias('last_merged_date'))
                  .withColumn('is_compliant',
                              f.when((f.col('num_prs') == f.col('num_closed_prs'))
-                                    & (f.lower(f.col('repository_owner')).contains('scytale')), True)
+                                    & (f.lower(f.col('repository_owner')).contains('scytale')),
+                                    True)
                              .otherwise(False)))
 
     return result_df
 
 
 if __name__ == '__main__':
-    spark = spark_builder(appname='ReadJsonFiles')
-
     get_github_data(GITHUB_ORGANIZATION)
 
-    df = transform_data(spark=spark,
-                        github_organization=GITHUB_ORGANIZATION,
+    df = transform_data(github_organization=GITHUB_ORGANIZATION,
                         schema=github_prs_schema)
 
     write_to_parquet(df=df,
